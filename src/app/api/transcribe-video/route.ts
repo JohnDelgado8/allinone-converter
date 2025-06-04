@@ -20,15 +20,12 @@ import ffmpeg from 'fluent-ffmpeg';
 // --- OpenAI Client Initialization ---
 if (!process.env.OPENAI_API_KEY) {
   console.error("FATAL ERROR: OPENAI_API_KEY is not set in environment variables.");
-  // In a real app, you might throw an error here or handle it gracefully
-  // For this example, we'll let it potentially fail later if used.
 }
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
 async function extractAudio(videoPath: string, outputDir: string): Promise<string> {
-  // Create a unique name for the audio file to prevent collisions if multiple requests process same named video
   const uniqueSuffix = Date.now() + "_" + Math.random().toString(36).substring(2, 8);
   const audioFileName = `${path.parse(videoPath).name}_${uniqueSuffix}_audio.mp3`;
   const audioOutputPath = path.join(outputDir, audioFileName);
@@ -59,7 +56,6 @@ async function transcribeWithWhisper(audioPath: string): Promise<string> {
   }
   console.log(`Transcribing audio with Whisper: ${audioPath}`);
   try {
-    // Ensure file exists before creating a read stream
     await fsPromises.access(audioPath, fsSync.constants.R_OK);
 
     const transcription = await openai.audio.transcriptions.create({
@@ -67,18 +63,62 @@ async function transcribeWithWhisper(audioPath: string): Promise<string> {
       file: fsSync.createReadStream(audioPath),
     });
     
-    if (typeof transcription.text === 'string') {
-      return transcription.text;
+    // OpenAI.Audio.Transcriptions.Transcription type has `text: string;`
+    const text = transcription.text;
+
+    if (typeof text === 'string') {
+      return text;
     } else {
-      console.warn("Unexpected Whisper API response format. Full response:", transcription);
-      const possibleText = (transcription as any).text || (transcription as any).data?.text;
-        if (possibleText) return possibleText;
-      throw new Error("Could not extract text from Whisper API response.");
+      // This block is a fallback for unexpected API behavior or type mismatches.
+      console.warn("Whisper API response 'text' field is not a string as expected. Full response:", transcription);
+      
+      const unknownTranscription = transcription as unknown;
+      let extractedText: string | undefined = undefined;
+
+      if (typeof unknownTranscription === 'object' && unknownTranscription !== null) {
+        if ('text' in unknownTranscription && typeof (unknownTranscription as { text?: unknown }).text === 'string') {
+          extractedText = (unknownTranscription as { text: string }).text;
+        }
+        else if ('data' in unknownTranscription) {
+          const dataProp = (unknownTranscription as { data?: unknown }).data;
+          if (typeof dataProp === 'object' && dataProp !== null && 'text' in dataProp && typeof (dataProp as { text?: unknown }).text === 'string') {
+            extractedText = (dataProp as { text: string }).text;
+          }
+        }
+      }
+
+      if (extractedText !== undefined) {
+        return extractedText;
+      }
+      
+      throw new Error("Could not extract text from Whisper API response: 'text' field missing, not a string, or structure unexpected.");
     }
 
-  } catch (error: any) {
-    console.error("Whisper API Error:", error.response ? error.response.data : error.message, error);
-    throw new Error(`Whisper API transcription failed: ${error.message}`);
+  } catch (error: unknown) { // Changed from any to unknown
+    let detailMessage = "Unknown Whisper API error";
+    let errorResponseData: unknown = null;
+
+    if (error instanceof Error) {
+        detailMessage = error.message;
+    }
+
+    // OpenAI SDK errors often have `error.response.data` or `error.error`
+    if (typeof error === 'object' && error !== null) {
+        if ('response' in error) {
+            const errResponse = (error as { response?: unknown }).response;
+            if (typeof errResponse === 'object' && errResponse !== null && 'data' in errResponse) {
+                errorResponseData = (errResponse as { data: unknown }).data;
+            } else {
+                errorResponseData = errResponse;
+            }
+        } else if ('error' in error) { // Some OpenAI errors might be structured with an 'error' property
+            errorResponseData = (error as { error: unknown }).error;
+        } else {
+            errorResponseData = error; // Fallback to the error object itself
+        }
+    }
+    console.error("Whisper API Error:", errorResponseData ? errorResponseData : detailMessage, error); // Log full error for server-side debugging
+    throw new Error(`Whisper API transcription failed: ${detailMessage}`);
   }
 }
 
@@ -125,14 +165,12 @@ async function downloadYouTubeVideoAndExtractAudio(videoUrl: string, outputDir: 
   });
   
   const audioFilePath = await extractAudio(tempDownloadedVideoPath, outputDir);
-  // No need to explicitly delete tempDownloadedVideoPath here, as the entire tempSessionDir will be removed.
   return { audioFilePath: audioFilePath, videoTitle };
 }
 
 
 export async function POST(req: NextRequest) {
   console.log("API /api/transcribe-video POST request received");
-  // Create a unique temporary directory for this session's files
   const tempSessionDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'transcribe-session-'));
   let audioToTranscribePath: string | null = null;
   let videoTitleFromUrl: string | undefined = undefined;
@@ -140,9 +178,8 @@ export async function POST(req: NextRequest) {
 
   try {
     const formData = await req.formData();
-    const operationType = formData.get('operationType') as string | null; // Get as string or null
+    const operationType = formData.get('operationType') as string | null; 
 
-    // Log the received operationType for debugging
     console.log("Received operationType:", operationType);
 
     if (operationType === 'file') {
@@ -152,12 +189,12 @@ export async function POST(req: NextRequest) {
       }
       console.log(`File Upload: ${videoFile.name}, Size: ${videoFile.size}`);
       originalFileNameForDisplay = videoFile.name;
-      const tempUploadedVideoPath = path.join(tempSessionDir, videoFile.name); // Save uploaded file in session dir
+      const tempUploadedVideoPath = path.join(tempSessionDir, videoFile.name); 
       
       const videoBuffer = Buffer.from(await videoFile.arrayBuffer());
       await fsPromises.writeFile(tempUploadedVideoPath, videoBuffer);
       
-      audioToTranscribePath = await extractAudio(tempUploadedVideoPath, tempSessionDir); // Extract audio into session dir
+      audioToTranscribePath = await extractAudio(tempUploadedVideoPath, tempSessionDir); 
 
     } else if (operationType === 'url') {
       const videoUrl = formData.get('videoUrl') as string | null;
@@ -165,12 +202,11 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'No video URL provided.' }, { status: 400 });
       }
       console.log(`URL Submission: ${videoUrl}`);
-      const downloadResult = await downloadYouTubeVideoAndExtractAudio(videoUrl, tempSessionDir); // Download and extract into session dir
+      const downloadResult = await downloadYouTubeVideoAndExtractAudio(videoUrl, tempSessionDir); 
       audioToTranscribePath = downloadResult.audioFilePath;
       videoTitleFromUrl = downloadResult.videoTitle;
-      originalFileNameForDisplay = videoTitleFromUrl;
+      originalFileNameForDisplay = videoTitleFromUrl; // For URLs, use the fetched video title
     } else {
-      // If operationType is null, undefined, or not 'file'/'url'
       console.error(`Invalid operationType received: ${operationType}`);
       return NextResponse.json({ error: 'Invalid operation type. Ensure "operationType" is sent correctly from the client.' }, { status: 400 });
     }
@@ -182,18 +218,45 @@ export async function POST(req: NextRequest) {
 
     const transcriptionText = await transcribeWithWhisper(audioToTranscribePath);
 
-    return NextResponse.json({ transcription: transcriptionText, videoTitle: videoTitleFromUrl });
+    return NextResponse.json({ 
+        transcription: transcriptionText, 
+        videoTitle: videoTitleFromUrl,
+        originalFileName: originalFileNameForDisplay // Used variable
+    });
 
-  } catch (error) {
+  } catch (error: unknown) { // Changed from implicit any
     console.error('API Route /api/transcribe-video Error:', error);
     let errorMessage = 'An unknown error occurred during transcription processing.';
-    let errorDetails = null;
+    
+    // This 'detailsForResponse' replaces the previous 'errorDetails = null' logic.
+    let detailsForResponse: unknown = null; 
+
     if (error instanceof Error) {
       errorMessage = error.message;
-      // You might want to avoid sending full stack in production for some errors
-      // errorDetails = error.stack; 
     }
-    return NextResponse.json({ error: errorMessage, details: errorDetails }, { status: 500 });
+
+    // Populate detailsForResponse for more informative error messages client-side
+    if (typeof error === 'object' && error !== null) {
+        if ('response' in error) {
+            const errResponse = (error as { response?: unknown }).response;
+            if (typeof errResponse === 'object' && errResponse !== null && 'data' in errResponse) {
+                detailsForResponse = (errResponse as { data: unknown }).data;
+            } else {
+                detailsForResponse = errResponse; 
+            }
+        } else if ('error' in error) { // Common structure for OpenAI SDK errors
+            detailsForResponse = (error as { error: unknown }).error;
+        } else if (error instanceof Error) {
+            // Fallback: provide some structured info from the Error object
+            // detailsForResponse = { name: error.name, message: error.message };
+        } else {
+            detailsForResponse = error; // Send the raw error object if it's not an Error instance.
+        }
+    }
+    // The prefer-const error on a previous `let errorDetails = null;` is resolved
+    // because we now have a variable `detailsForResponse` that is conditionally assigned.
+    
+    return NextResponse.json({ error: errorMessage, details: detailsForResponse }, { status: 500 });
   } finally {
     if (tempSessionDir) {
       try {

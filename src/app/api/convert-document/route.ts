@@ -39,7 +39,7 @@ async function performCloudConversion(
 ): Promise<{ convertedFileBuffer: Buffer, convertedFileName: string }> {
     console.log(`[CloudConvert] Starting conversion for ${inputFile.name} to ${targetFormat}`);
 
-    let job;
+    let job: CloudConvert.Job | undefined; // Define type for job
     try {
         job = await cloudConvert.jobs.create({
             tasks: {
@@ -99,7 +99,10 @@ async function performCloudConversion(
         
         console.log(`[CloudConvert] Downloading converted file: ${convertedFileName} from ${resultFile.url}`);
         
-        const downloadResponse = await fetch(resultFile.url!); // resultFile.url should exist
+        if (!resultFile.url) { // Add a check for url existence
+            throw new Error('CloudConvert export task result did not contain a URL.');
+        }
+        const downloadResponse = await fetch(resultFile.url); 
         if (!downloadResponse.ok || !downloadResponse.body) {
             throw new Error(`Failed to download converted file from CloudConvert: ${downloadResponse.statusText}`);
         }
@@ -107,10 +110,32 @@ async function performCloudConversion(
         
         return { convertedFileBuffer, convertedFileName };
 
-    } catch (error: any) {
-        console.error('[CloudConvert] Error during conversion process:', error.response ? error.response.data : error);
+    } catch (error: unknown) { // Changed from any to unknown
+        let errorMessage = "Unknown CloudConvert error";
+        let errorDetails: unknown = null; 
+
+        if (error instanceof Error) {
+            errorMessage = error.message;
+        }
+
+        // Attempt to get more specific details from CloudConvert error structure
+        // CloudConvert errors often have a 'response.data' structure
+        if (typeof error === 'object' && error !== null) {
+            if ('response' in error) {
+                const response = (error as { response?: unknown }).response;
+                if (typeof response === 'object' && response !== null && 'data' in response) {
+                    errorDetails = (response as { data: unknown }).data;
+                } else {
+                    errorDetails = response; // Fallback to the response object itself
+                }
+            } else {
+                errorDetails = error; // Fallback to the whole error object
+            }
+        }
+        
+        console.error('[CloudConvert] Error during conversion process:', errorDetails || errorMessage);
         if (job && job.id) console.error(`[CloudConvert] Failed Job ID: ${job.id}`);
-        throw new Error(`CloudConvert processing failed: ${error.message}`);
+        throw new Error(`CloudConvert processing failed: ${errorMessage}`);
     }
 }
 
@@ -127,7 +152,6 @@ export async function POST(req: NextRequest) {
     const formData = await req.formData();
     const documentFile = formData.get('document') as File | null;
     const targetFormat = formData.get('targetFormat') as string | null;
-    // inputFileType and inputFileName are still good to have for logging or if needed by API
     const inputFileName = formData.get('inputFileName') as string | null; 
 
     if (!documentFile || !inputFileName) {
@@ -139,7 +163,6 @@ export async function POST(req: NextRequest) {
 
     console.log(`Received document: ${inputFileName}, Size: ${documentFile.size}, Target Format: ${targetFormat}`);
 
-    // Pass the File object directly to the cloud conversion function
     const { convertedFileBuffer, convertedFileName } = await performCloudConversion(
         documentFile,
         targetFormat
@@ -152,15 +175,33 @@ export async function POST(req: NextRequest) {
 
     return new NextResponse(convertedFileBuffer, { status: 200, headers });
 
-  } catch (error) {
+  } catch (error: unknown) { // Changed from implicit any to unknown
     console.error('API Route /api/convert-document Error:', error);
     let errorMessage = 'An unknown error occurred during document conversion.';
     if (error instanceof Error) {
       errorMessage = error.message;
     }
-    // Try to get more specific details from cloud convert errors if possible
-    const details = (error as any).details || (error instanceof Error && (error as any).response?.data) || null;
-    return NextResponse.json({ error: errorMessage, details: details }, { status: 500 });
+
+    let responseDetails: unknown = null;
+    if (typeof error === 'object' && error !== null) {
+        if ('details' in error) { // Check for a 'details' property first
+            responseDetails = (error as { details: unknown }).details;
+        } else if ('response' in error) { // Then check for 'response.data'
+            const errResponse = (error as { response?: unknown }).response;
+            if (typeof errResponse === 'object' && errResponse !== null && 'data' in errResponse) {
+                responseDetails = (errResponse as { data: unknown }).data;
+            } else {
+                responseDetails = errResponse; // Fallback: use the response object itself if 'data' is not present
+            }
+        } else if (error instanceof Error) {
+             // If it's an error instance but no specific structure found, use the error object itself for details
+             // (excluding stack for brevity in response, but good for server logs)
+            // responseDetails = { name: error.name, message: error.message }; 
+        } else {
+            responseDetails = error; // Fallback to the error object itself
+        }
+    }
+    
+    return NextResponse.json({ error: errorMessage, details: responseDetails }, { status: 500 });
   }
-  // No finally block needed for temp dir cleanup as performCloudConversion handles its own temp files
 }
