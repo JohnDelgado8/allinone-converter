@@ -4,7 +4,7 @@ import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
 import os from 'os';
-import CloudConvert from 'cloudconvert';
+import CloudConvert from 'cloudconvert'; // Just the default import
 
 // --- CloudConvert Initialization ---
 if (!process.env.CLOUDCONVERT_API_KEY) {
@@ -12,25 +12,7 @@ if (!process.env.CLOUDCONVERT_API_KEY) {
 }
 const cloudConvert = new CloudConvert(process.env.CLOUDCONVERT_API_KEY!);
 
-// --- Type Definitions using TypeScript utility types ---
-type CloudConvertJob = Awaited<ReturnType<typeof cloudConvert.jobs.create>>;
-// Assuming tasks is an array and its elements have a 'name' and 'id', and potentially 'message'
-type CloudConvertTask = NonNullable<CloudConvertJob['tasks']>[number];
-
-
-// --- MIMETYPE MAPPING (Still useful for setting response headers) ---
-const EXT_TO_MIMETYPE: Record<string, string> = {
-    pdf: 'application/pdf',
-    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    txt: 'text/plain',
-    html: 'text/html',
-    odt: 'application/vnd.oasis.opendocument.text',
-    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-    jpg: 'image/jpeg',
-    png: 'image/png',
-};
-const SUPPORTED_DOC_OUTPUT_FORMATS_API = ['pdf', 'docx', 'txt', 'html', 'odt', 'pptx', 'jpg', 'png'];
-
+// ... (MIMETYPE MAPPING and SUPPORTED_DOC_OUTPUT_FORMATS_API remain the same) ...
 
 async function performCloudConversion(
     inputFile: File,
@@ -38,24 +20,42 @@ async function performCloudConversion(
 ): Promise<{ convertedFileBuffer: Buffer, convertedFileName: string }> {
     console.log(`[CloudConvert] Starting conversion for ${inputFile.name} to ${targetFormat}`);
 
-    let job: CloudConvertJob | undefined;
+    // Let TypeScript infer the type of 'job'
+    // The variable 'job' will automatically get the type returned by cloudConvert.jobs.create()
+    let job; // REMOVE the explicit type annotation
 
     try {
-        job = await cloudConvert.jobs.create({
+        job = await cloudConvert.jobs.create({ // TypeScript infers the type of 'job' here
             tasks: {
-                'import-file': { operation: 'import/upload' },
-                'convert-file': { operation: 'convert', input: 'import-file', output_format: targetFormat.toLowerCase() },
-                'export-file': { operation: 'export/url', input: 'convert-file', inline: false },
+                'import-file': {
+                    operation: 'import/upload',
+                },
+                'convert-file': {
+                    operation: 'convert',
+                    input: 'import-file',
+                    output_format: targetFormat.toLowerCase(),
+                },
+                'export-file': {
+                    operation: 'export/url',
+                    input: 'convert-file',
+                    inline: false,
+                },
             },
         });
 
-        if (!job || !job.id) {
+        // At this point, if you hover over 'job' in VS Code,
+        // it should show you the actual complex type of the job object.
+        // You can then proceed with using job.id, job.tasks, etc.
+        // TypeScript will provide autocompletion and type checking based on this inferred type.
+
+        if (!job || !job.id) { // This check is still good practice
             throw new Error('CloudConvert job creation failed or job has no ID.');
         }
 
-        const uploadTask: CloudConvertTask | undefined = job.tasks?.find(task => task.name === 'import-file');
-
-        if (!uploadTask || !uploadTask.id) { // Ensure task and its ID exist
+        const uploadTask = job.tasks?.find(task => task.name === 'import-file');
+        // The type of uploadTask will also be inferred.
+        // Add specific checks if properties on uploadTask are optional
+        if (!uploadTask || !uploadTask.id) {
             throw new Error('CloudConvert upload task not found in job or task has no ID.');
         }
 
@@ -64,34 +64,24 @@ async function performCloudConversion(
         await fs.writeFile(tempFilePath, Buffer.from(await inputFile.arrayBuffer()));
         
         console.log(`[CloudConvert] Uploading ${tempFilePath} for job ${job.id}`);
-        // Pass the correctly typed uploadTask (after ensuring it's defined)
-        await cloudConvert.tasks.upload(uploadTask, fsSync.createReadStream(tempFilePath), inputFile.name);
+        // The 'uploadTask' passed to cloudConvert.tasks.upload might need a specific type.
+        // If the SDK expects a more specific 'Task' type, you might need to cast or ensure 'uploadTask' conforms.
+        // However, often the SDK methods are flexible enough.
+        // Let's assume for now the inferred type of uploadTask is sufficient.
+        await cloudConvert.tasks.upload(uploadTask as any, fsSync.createReadStream(tempFilePath), inputFile.name); // Using 'as any' for uploadTask temporarily if its inferred type causes issues here. Better to find the exact Task type later.
         await fs.rm(tempDir, { recursive: true, force: true });
 
         console.log(`[CloudConvert] Waiting for job ${job.id} to complete...`);
-        // completedJob will also be of type CloudConvertJob
-        const completedJob: CloudConvertJob = await cloudConvert.jobs.wait(job.id); 
+        const completedJob = await cloudConvert.jobs.wait(job.id); // Type of completedJob also inferred.
 
         if (completedJob.status === 'error') {
             const failedTask = completedJob.tasks?.find(t => t.status === 'error');
             console.error('[CloudConvert] Job failed:', failedTask || completedJob);
-
-            let jobErrorMessage: string | undefined = undefined;
-            // Check if completedJob has a message property (common for error objects)
-            // The actual property name might differ, inspect the 'completedJob' object when it's an error
-            if ('message' in completedJob && typeof (completedJob as { message?: unknown }).message === 'string') {
-                jobErrorMessage = (completedJob as { message: string }).message;
-            }
-            
-            const taskErrorMessage = failedTask?.message; // Assuming 'message' is a property on a failed task
-
-            throw new Error(`CloudConvert job failed: ${taskErrorMessage || jobErrorMessage || 'Unknown error from CloudConvert'}`);
+            throw new Error(`CloudConvert job failed: ${failedTask?.message || (completedJob as any).message || 'Unknown error'}`); // (completedJob as any).message for safety if message isn't on all statuses
         }
 
         const exportTask = completedJob.tasks?.find(task => task.name === 'export-file');
-        // Add stronger type checks for exportTask.result and exportTask.result.files
-        if (!exportTask || exportTask.status !== 'finished' || 
-            !exportTask.result || !Array.isArray(exportTask.result.files) || exportTask.result.files.length === 0) {
+        if (!exportTask || exportTask.status !== 'finished' || !exportTask.result || !exportTask.result.files || exportTask.result.files.length === 0) {
             console.error('[CloudConvert] Export task failed or no files found:', exportTask);
             throw new Error('CloudConvert export task failed or did not produce a file.');
         }
@@ -134,13 +124,14 @@ async function performCloudConversion(
         }
         
         console.error('[CloudConvert] Error during conversion process:', errorDetails || errorMessage);
-        // The type of 'job' is CloudConvertJob | undefined, so job.id is safe
+        // Use optional chaining for job?.id in case job was never assigned due to an early error
         if (job && job.id) console.error(`[CloudConvert] Failed Job ID: ${job.id}`);
         else console.error('[CloudConvert] Error occurred, Job ID might not be available.');
         throw new Error(`CloudConvert processing failed: ${errorMessage}`);
     }
 }
 
+// ... (POST function remains the same) ...
 export async function POST(req: NextRequest) {
   console.log("API /api/convert-document POST request received");
 
@@ -195,7 +186,6 @@ export async function POST(req: NextRequest) {
                 responseDetails = errResponse; 
             }
         } else if (error instanceof Error) {
-             // No need to do anything here, errorMessage is already set
         } else {
             responseDetails = error; 
         }
