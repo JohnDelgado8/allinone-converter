@@ -1,0 +1,43 @@
+/* src/app/globals.css */
+
+/* 1) Pull in the entire Tailwind engine */
+@import "tailwindcss";
+
+
+/* 2) (Optional) Explicitly tell Tailwind where to look. 
+      You can omit these if you’re happy with the auto-detection. */
+/* 
+   Note on @source: While the Tailwind v4 docs might show this, 
+   the primary mechanism for content detection is still the content array 
+   in tailwind.config.ts. Using @source might be for more advanced 
+   or specific scenarios, or its behavior might still be evolving in alpha.
+   For now, ensure your tailwind.config.ts content paths are correct.
+   Let's comment these out initially to rely on tailwind.config.ts,
+   as the error you saw previously was related to scanning.
+*/
+/* 
+@source "./src/app"; 
+@source "./src/components"; 
+*/
+
+
+/* 3) Define your Bets10 theme variables */
+@theme {
+  /* Theme variables are defined using CSS custom properties syntax */
+  --color-bets10-dark: #121212;
+  --color-bets10-light-gray: #f5f5f5; /* Adjusted to a lighter gray */
+  --color-bets10-gold: #FFD700;
+  --color-bets10-green: #027d21; /* Using your specified green */
+  /* You can also define other theme tokens like fonts, spacing etc. here */
+  /* Example: --font-family-sans: theme(fontFamily.roboto); */
+  /* Example: --spacing-standard: theme(spacing.4); */
+}
+
+/* 4) Any global overrides you want */
+body {
+  background-color: var(--color-bets10-dark); /* #121212 (very dark) */
+  color: var(--color-bets10-light-gray);    /* #f5f5f5 (very light) */
+}
+
+/* You can also define custom utility classes or component styles here if needed,
+   though Tailwind v4 encourages defining more via @theme and utility composition. */

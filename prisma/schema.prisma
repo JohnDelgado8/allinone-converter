@@ -1,0 +1,31 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite" // Or your chosen provider
+  url      = env("DATABASE_URL")
+}
+
+// Example model - you can expand this for user accounts, conversion history, etc.
+model ConversionLog {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  originalFileName String
+  originalFormat   String
+  targetFormat     String
+  userId           String? // Optional: if you add user accounts
+  // user User? @relation(fields: [userId], references: [id]) // If you have a User model
+}
+
+// model User {
+//   id String @id @default(cuid())
+//   email String @unique
+//   name String?
+//   conversions ConversionLog[]
+// }
