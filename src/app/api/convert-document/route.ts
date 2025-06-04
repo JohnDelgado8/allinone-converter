@@ -4,7 +4,8 @@ import fs from 'fs/promises'; // Still needed for reading uploaded file to strea
 import fsSync from 'fs'; // For createReadStream
 import path from 'path';
 import os from 'os';
-import CloudConvert from 'cloudconvert'; // Import the SDK
+import CloudConvert, { Job } from 'cloudconvert';
+
 
 // --- CloudConvert Initialization ---
 if (!process.env.CLOUDCONVERT_API_KEY) {
@@ -39,7 +40,7 @@ async function performCloudConversion(
 ): Promise<{ convertedFileBuffer: Buffer, convertedFileName: string }> {
     console.log(`[CloudConvert] Starting conversion for ${inputFile.name} to ${targetFormat}`);
 
-    let job: CloudConvert.Job | undefined; // Define type for job
+    let job: Job | undefined; // Define type for job
     try {
         job = await cloudConvert.jobs.create({
             tasks: {
